@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>BWC Helth Checker</title>
+    <style>
+      #wrap {
+        padding: 10px 30px;
+        width: 80%;
+        min-width: 1000px;
+        margin: 0 auto;
+      }
+
+      #executeAllButton,
+      #executeAllButtonAuto,
+      #searchButton,
+      .execute {
+        border: 0;
+        padding: 10px 30px;
+        border-radius: 20px;
+        color: #fff;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      #executeAllButton,
+      .execute {
+        background: #0082cb;
+      }
+
+      #executeAllButtonAuto {
+        background: #e7914b;
+      }
+
+      #searchButton {
+        background: #ff6e6e;
+      }
+
+      .center-button {
+        text-align: center;
+      }
+
+      #resultsTable {
+        margin-top: 20px;
+        border-collapse: collapse;
+        border: 1px solid #ccc;
+        border-left: 0;
+        border-right: 0;
+        width: 100%;
+      }
+
+      #resultsTable th {
+        text-align: left;
+      }
+      #resultsTable th:nth-child(1) {
+        text-align: center;
+      }
+
+      #resultsTable th:nth-child(4) {
+        text-align: center;
+      }
+
+      #resultsTable th,
+      #resultsTable td {
+        padding: 10px 24px;
+        border: 1px solid #ccc;
+        border-left: 0;
+        border-right: 0;
+        vertical-align: middle;
+      }
+
+      #resultsTable td:nth-child(1) {
+        width: 10%;
+      }
+
+      #resultsTable td:nth-child(2) {
+        width: 30%;
+      }
+
+      #resultsTable td:nth-child(3) {
+        width: 15%;
+      }
+
+      #resultsTable td:nth-child(4) {
+        width: 15%;
+        text-align: center;
+      }
+
+      #resultsTable td:nth-child(5) {
+        width: 30%;
+      }
+
+      #resultsTable td .statusIcon {
+        height: 100%;
+        display: block;
+        padding: 8px 0;
+        border-radius: 20px;
+      }
+
+      .statusIcon.status-1xx {
+        background-color: #e7cb4b;
+        color: #fff;
+      }
+
+      .statusIcon.status-2xx {
+        background-color: #5ec762;
+        color: #fff;
+      }
+
+      .statusIcon.status-3xx {
+        background-color: #e7914b;
+        color: #fff;
+      }
+
+      .statusIcon.status-4xx,
+      .statusIcon.status-5xx,
+      .statusIcon.status-none {
+        background-color: #ff6e6e;
+        color: #fff;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="wrap">
+      <h1>BWC Helth Checker</h1>
+      <button id="executeAllButton">Execute All</button>
+      <button id="executeAllButtonAuto">Repeat Start</button>
+      <button id="searchButton">Search and Show</button>
+
+      <table id="resultsTable">
+        <thead>
+          <tr>
+            <th>Action</th>
+            <th>URL</th>
+            <th>Success</th>
+            <th>StatusCode</th>
+            <th>Data</th>
+          </tr>
+        </thead>
+        <tbody>
+          <!-- table rows -->
+        </tbody>
+      </table>
+
+      <script>
+        /*interval 전역 변수*/
+        let autoExecuteInterval;
+        const intervalTime = 3000; // ms (2001 이상만 가능. 에러 최소 시간이 2000)
+
+        /*
+          indexed DB 초기 설정
+        */
+        function initDatabase() {
+          return new Promise((resolve, reject) => {
+            const openRequest = indexedDB.open("api_responses", 1);
+
+            openRequest.onupgradeneeded = function (e) {
+              const db = e.target.result;
+              const store = db.createObjectStore("responses", {
+                keyPath: "uuid",
+              });
+              store.createIndex("time", "time", { unique: false });
+              store.createIndex("url", "url", { unique: false });
+            };
+
+            openRequest.onsuccess = function (e) {
+              resolve(e.target.result);
+            };
+
+            openRequest.onerror = function (e) {
+              reject(new Error("Error opening database"));
+            };
+          });
+        }
+
+        /*indexedDB에 응답 데이터 저장*/
+        function saveResponseData(db, responseData) {
+          const { url, success, statusCode, data } = responseData;
+          const uuid =
+            new Date().getTime().toString() +
+            Math.random().toString(16).slice(2);
+
+          const today = new Date();
+          const month = today.getMonth() + 1;
+          const date = today.getDate();
+          const hour = today.getHours();
+          const minute = today.getMinutes();
+          const second = today.getTime();
+
+          const transaction = db.transaction(["responses"], "readwrite");
+          const store = transaction.objectStore("responses");
+          const item = {
+            uuid,
+            time: `${month}${date}${hour}${minute}${second}`,
+            url,
+            success,
+            statusCode,
+            data,
+          };
+
+          store.add(item);
+        }
+
+        /*
+          API 호출
+        */
+        async function callAPI(db, url, row) {
+          // Table Columns
+          ["Success", "Status Code", "Data"].forEach((_, index) => {
+            row.children[2 + index].textContent = "Requesting..."; // api 요청 중 표시 할 Text
+          });
+
+          let statusCode;
+          let data;
+          let success;
+
+          const timeoutPromise = new Promise(
+            (_, reject) =>
+              setTimeout(() => reject(new Error("Request timed out")), 2000) // 응답 대기 2초. 2초 이상 오류처리
+          );
+
+          try {
+            const response = await Promise.race([fetch(url), timeoutPromise]);
+            statusCode = response.status;
+            data = await response.json();
+            success = response.ok;
+          } catch (error) {
+            data = error.message;
+            success = false;
+            statusCode = null;
+          }
+
+          saveResponseData(db, {
+            url,
+            success,
+            statusCode,
+            data: JSON.stringify(data),
+          });
+
+          // row에 값 할당
+          row.children[2].textContent = success;
+          row.children[3].innerHTML =
+            "<span class='statusIcon'>" + statusCode + "</span>";
+          row.children[4].textContent = JSON.stringify(data);
+
+          /*
+            Status 상태에 따라 배경색 변경
+          */
+          const statusCodeCell = row.children[3].children[0];
+          statusCodeCell.classList.remove(
+            "status-1xx",
+            "status-2xx",
+            "status-3xx",
+            "status-4xx",
+            "status-5xx"
+          );
+
+          if (statusCode >= 100 && statusCode < 200) {
+            statusCodeCell.classList.add("status-1xx");
+          } else if (statusCode >= 200 && statusCode < 300) {
+            statusCodeCell.classList.add("status-2xx");
+          } else if (statusCode >= 300 && statusCode < 400) {
+            statusCodeCell.classList.add("status-3xx");
+          } else if (statusCode >= 400 && statusCode < 500) {
+            statusCodeCell.classList.add("status-4xx");
+          } else if (statusCode >= 500) {
+            statusCodeCell.classList.add("status-5xx");
+          } else {
+            statusCodeCell.innerHTML = "<span>none</span>";
+            statusCodeCell.classList.add("status-none");
+          }
+        }
+
+        window.addEventListener("load", async () => {
+          const db = await initDatabase();
+
+          /*
+          API Endpoint 기입
+          */
+          const apiEndpoints = [
+            "https://jsonplaceholder.typicode.com/todos/1",
+            "https://jsonplaceholder.typicode.com/todos/2",
+            "https://some-failing-or-inaccessible-url",
+            "https://jsonplaceholder.typicode.com/todos/1",
+            "https://jsonplaceholder.typicode.com/todos/2",
+          ];
+
+          const $tableBody = document
+            .getElementById("resultsTable")
+            .querySelector("tbody");
+          const $executeAllButton = document.getElementById("executeAllButton");
+          const $executeAllButtonAuto = document.getElementById(
+            "executeAllButtonAuto"
+          );
+          const executeButtons = [];
+
+          // APIs를 기준으로 table body row 생성
+          apiEndpoints.forEach((url, index) => {
+            const $row = document.createElement("tr");
+            $row.id = `row-${index}`;
+
+            // 실행버튼 추가
+            const actionCell = document.createElement("td");
+            const executeButton = document.createElement("button");
+            actionCell.className = "center-button";
+            executeButton.textContent = "Execute";
+            executeButton.className = "execute";
+            executeButton.onclick = async () => {
+              setDisableBtn(executeButton, true);
+              await callAPI(db, url, $row);
+              setDisableBtn(executeButton, false);
+            };
+            actionCell.appendChild(executeButton);
+            $row.appendChild(actionCell);
+
+            // 컬럼 기본값 설정
+            [url, "None", "None", "None"].forEach((text, cellIndex) => {
+              const cell = document.createElement("td");
+              cell.textContent = text;
+              if (cellIndex === 2) {
+                cell.className = "statusCode";
+                cell.innerHTML = "<span class='statusIcon'>" + text + "</span>";
+              }
+              $row.appendChild(cell);
+            });
+
+            $tableBody.appendChild($row);
+            executeButtons.push(executeButton);
+          });
+
+          function setDisableBtn(btn, status) {
+            btn.disabled = status;
+            btn.style.opacity = status ? "0.3" : "1";
+          }
+
+          /*
+          모든 버튼 상태 변경
+          */
+          function setDisableAllBtn(status) {
+            $executeAllButton.disabled = status;
+            $executeAllButton.style.opacity = status ? "0.3" : "1";
+            executeButtons.forEach((button) => {
+              button.disabled = status;
+              button.style.opacity = status ? "0.3" : "1";
+            });
+          }
+
+          /*
+          API 모두 실행
+          */
+          async function executeAllAPIs(db) {
+            setDisableAllBtn(true);
+
+            // 모든 Row의 API 실행
+            for (let i = 0; i < apiEndpoints.length; i++) {
+              const url = apiEndpoints[i];
+              const $row = document.getElementById(`row-${i}`);
+              // await callAPI(db, url, $row); // 지연 발생 시 반복 실행 때 응답이 올 때 까지 기다리게 됨.
+              callAPI(db, url, $row);
+            }
+
+            setDisableAllBtn(false);
+          }
+
+          /*
+          모두 실행 Click Event
+          */
+          $executeAllButton.onclick = async () => {
+            executeAllAPIs(db);
+          };
+
+          /*
+          반복 실행 Click Event
+          */
+          $executeAllButtonAuto.onclick = () => {
+            if (autoExecuteInterval) {
+              clearInterval(autoExecuteInterval);
+              autoExecuteInterval = null;
+              $executeAllButtonAuto.textContent = "Start";
+            } else {
+              executeAllAPIs(db);
+              autoExecuteInterval = setInterval(async () => {
+                await executeAllAPIs(db);
+              }, intervalTime); //60,000ms -> 1 minute
+              $executeAllButtonAuto.textContent = "Repeat Stop";
+            }
+          };
+
+          /* 에러난 API만 조회 */
+          async function searchDatabaseAndShowPopup(db) {
+            const transaction = db.transaction(["responses"], "readonly");
+            const objectStore = transaction.objectStore("responses");
+
+            const request = objectStore.openCursor();
+            const results = [];
+
+            request.onsuccess = function (event) {
+              const cursor = event.target.result;
+
+              console.log(cursor);
+
+              if (cursor) {
+                const statusCode = cursor.value.statusCode;
+
+                if (!statusCode || (statusCode >= 300 && statusCode < 500)) {
+                  results.push(cursor.value);
+                }
+
+                cursor.continue();
+              } else {
+                // No more results, show popup
+                if (results.length > 0) {
+                  const popupContent = results
+                    .map(
+                      (result) =>
+                        `<div>UUID: ${result.uuid}, Time: ${result.time}, URL: ${result.url}, Success: ${result.success}, Status Code: ${result.statusCode}, Data: ${result.data}</div>`
+                    )
+                    .join("");
+
+                  const popupWindow = window.open(
+                    "",
+                    "_blank",
+                    "width=1400,height=400,scrollbars=yes"
+                  );
+                  popupWindow.document.write(
+                    "<html><head><title>Search Results</title></head><body>"
+                  );
+                  popupWindow.document.write(popupContent);
+                  popupWindow.document.write("</body></html>");
+                } else {
+                  alert("3xx, 4xx, Fail 항목이 없습니다");
+                }
+              }
+            };
+          }
+
+          const searchButton = document.getElementById("searchButton");
+          searchButton.addEventListener("click", () =>
+            searchDatabaseAndShowPopup(db)
+          );
+        });
+      </script>
+    </div>
+  </body>
+</html>
